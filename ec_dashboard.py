@@ -86,13 +86,14 @@ def _num(v):
 def agg_raw(raw, img_map):
     """RAW(라인명 포함) → 병행/공식(pc), TOP10 브랜드, TOP30 상품(병행/공식). 필터 재집계용."""
     g = raw.groupby("분류")[["매출", "이익", "수량"]].sum()
+    _gq = raw[raw["매출"] != 0].groupby("분류")["수량"].sum()   # 객단가용(단가 0원 제외)
     pc = {}
     for cls in ["병행", "공식"]:
         if cls in g.index:
             s = float(g.loc[cls, "매출"])
             p = float(g.loc[cls, "이익"])
             pc[cls] = {"매출": s, "이익": p, "수익율": p / s if s else 0.0,
-                       "수량": float(g.loc[cls, "수량"])}
+                       "수량": float(_gq.get(cls, 0))}
         else:
             pc[cls] = {"매출": 0.0, "이익": 0.0, "수익율": 0.0, "수량": 0.0}
     total_sales = float(raw["매출"].sum())
@@ -137,16 +138,19 @@ def load(file_bytes: bytes):
     is_last = (v2 > 0 and v1 >= v2)
 
     def box(r):
-        tgt = ws.cell(r, 37).value   # AK 목표
-        ach = ws.cell(r, 38).value   # AL 달성율
+        # AH매출 AI이익 AJ객단가 AK수익율 AL목표 AM달성율
+        tgt = ws.cell(r, 38).value   # AL 목표
+        ach = ws.cell(r, 39).value   # AM 달성율
+        aov = ws.cell(r, 36).value   # AJ 객단가
         return {"매출": _num(ws.cell(r, 34).value), "이익": _num(ws.cell(r, 35).value),
-                "수익율": _num(ws.cell(r, 36).value),
+                "객단가": float(aov) if isinstance(aov, (int, float)) else None,
+                "수익율": _num(ws.cell(r, 37).value),
                 "목표": float(tgt) if isinstance(tgt, (int, float)) else None,
                 "달성율": float(ach) if isinstance(ach, (int, float)) else None}
-    cur_box, prev_box, prev2_box = box(8), box(16), box(24)
+    cur_box, prev_box, prev2_box = box(5), box(6), box(7)
 
-    cur_extra = {"목표": _num(ws.cell(8, 37).value), "달성율": _num(ws.cell(8, 38).value),
-                 "예상": _num(ws.cell(8, 41).value), "예상신장율": _num(ws.cell(8, 42).value)}
+    cur_extra = {"목표": _num(ws.cell(5, 38).value), "달성율": _num(ws.cell(5, 39).value),
+                 "예상": _num(ws.cell(5, 42).value), "예상신장율": _num(ws.cell(5, 43).value)}
 
     # 카테고리별 매출 (AG28:AK38 → 가방~용품+총합). AG=33
     cat_rows = []
@@ -155,8 +159,10 @@ def load(file_bytes: bytes):
         if nm is None:
             continue
         cat_rows.append({"구분": nm, "매출": _num(ws.cell(r, 34).value),
-                         "이익": _num(ws.cell(r, 35).value), "수익율": _num(ws.cell(r, 36).value),
-                         "재고원가": _num(ws.cell(r, 37).value)})
+                         "이익": _num(ws.cell(r, 35).value),
+                         "객단가": _num(ws.cell(r, 36).value),
+                         "수익율": _num(ws.cell(r, 37).value),
+                         "재고원가": _num(ws.cell(r, 38).value)})
     cat_sales = pd.DataFrame(cat_rows)
 
     # 쇼핑몰별 (전년 → 당월 → 전월 → 예상 → 대비)
@@ -272,6 +278,7 @@ def load(file_bytes: bytes):
         raw["필터일자"] = pd.to_datetime(_bgdt, errors="coerce")
         raw["필터일자"] = raw["필터일자"].fillna(pd.to_datetime(raw["날짜"], errors="coerce"))
         pc, top_brand, top_prod_bh, top_prod_gs = agg_raw(raw, img_map)
+        paid_qty = float(raw.loc[raw["매출"] != 0, "수량"].sum())   # 단가 0원(쇼핑백/사은품) 제외
     except Exception:
         raw = pd.DataFrame(columns=["분류", "쇼핑몰", "브랜드", "상품", "수량", "매출", "이익",
                                     "날짜", "비고", "카테고리", "라인명", "필터일자"])
@@ -280,6 +287,7 @@ def load(file_bytes: bytes):
         top_brand = pd.DataFrame(columns=["수량", "매출", "이익", "객단가", "수익율", "매출비중"])
         top_prod_bh = pd.DataFrame(columns=["매출", "이익", "수량", "브랜드", "카테고리", "이익율"])
         top_prod_gs = pd.DataFrame(columns=["매출", "이익", "수량", "브랜드", "카테고리", "이익율"])
+        paid_qty = 0.0
 
     # 병행/공식 당월 목표/달성율 (연간매출및 목표: 병행/공식 블록 합계행, 당월 목표매출 열)
     pc_mall = {"병행": pd.DataFrame(columns=["쇼핑몰", "목표", "매출", "달성율"]),
@@ -349,13 +357,13 @@ def load(file_bytes: bytes):
 
     return (month, prev, prev2, day, is_last, cur_box, prev_box, prev2_box,
             cur_extra, cat_sales, df, yearly, total_row, pc, top_brand, top_prod_bh, top_prod_gs,
-            raw, img_map, pc_mall, stock_map, model2line, stock_brand, stock_cat)
+            raw, img_map, pc_mall, stock_map, model2line, stock_brand, stock_cat, paid_qty)
 
 
 try:
     (month, prev, prev2, day, is_last, cur_box, prev_box, prev2_box,
      cur_extra, cat_sales, df, yearly, total_row, pc, top_brand, top_prod_bh, top_prod_gs,
-     raw, img_map, pc_mall, stock_map, model2line_g, stock_brand, stock_cat) = load(_data)
+     raw, img_map, pc_mall, stock_map, model2line_g, stock_brand, stock_cat, paid_qty) = load(_data)
 except Exception as e:
     st.error(f"파일을 읽지 못했습니다 (매출현황/연간 시트 확인): {e}")
     st.stop()
@@ -409,21 +417,22 @@ if _dt_on:
     _ps = float(raw_d["매출"].sum())
     _pp = float(raw_d["이익"].sum())
     _pq = float(raw_d["수량"].sum())
+    _pq_paid = float(raw_d.loc[raw_d["매출"] != 0, "수량"].sum())   # 객단가용
     st.subheader(f"📊 {_d1.strftime('%m/%d')}~{_d2.strftime('%m/%d')} 매출")
     c = st.columns(5)
     c[0].metric("매출", f"{_ps/1e8:,.2f}억")
     c[1].metric("이익", f"{_pp/1e8:,.2f}억", f"수익율 {(_pp/_ps if _ps else 0):.1%}")
-    c[2].metric("객단가", f"{(_ps/_pq if _pq else 0):,.0f}")
+    c[2].metric("객단가", f"{(_ps/_pq_paid if _pq_paid else 0):,.0f}")
     c[3].metric("수량", f"{_pq:,.0f}개")
     c[4].metric("일평균 매출", f"{_ps/max((_d2-_d1).days+1,1)/1e8:,.2f}억")
 else:
     title = f"{month}월 매출" if is_last else f"~{month}/{day} 까지 매출"
     st.subheader(f"📊 {title}")
     c = st.columns(5 if is_last else 6)
-    _kq = float(total_row.get("당월 수량", 0) or 0)
+    _kaov = cur_box.get("객단가") or ((cur_box["매출"] / paid_qty) if paid_qty else 0)
     c[0].metric("매출", f"{cur_box['매출']/1e8:,.2f}억")
     c[1].metric("이익", f"{cur_box['이익']/1e8:,.2f}억", f"수익율 {cur_box['수익율']:.1%}")
-    c[2].metric("객단가", f"{(cur_box['매출']/_kq if _kq else 0):,.0f}")
+    c[2].metric("객단가", f"{_kaov:,.0f}")
     c[3].metric("목표", f"{cur_extra['목표']/1e8:,.2f}억")
     c[4].metric("달성율", f"{cur_extra['달성율']:.1%}")
     if not is_last:
@@ -434,17 +443,16 @@ else:
 c_left, c_right = st.columns([1, 1.35])
 with c_left:
     st.markdown("##### 📅 월별 매출")
-    _q_cur = float(total_row.get("당월 수량", 0) or 0)
-    _q_prev = float(total_row.get("전월 수량", 0) or 0)
+
     mdf = pd.DataFrame([
         {"월": f"{prev2}월", "목표": prev2_box["목표"], "매출": prev2_box["매출"],
-         "이익": prev2_box["이익"], "객단가": None,
+         "이익": prev2_box["이익"], "객단가": prev2_box.get("객단가"),
          "수익율": prev2_box["수익율"], "달성율": prev2_box["달성율"]},
         {"월": f"{prev}월", "목표": prev_box["목표"], "매출": prev_box["매출"],
-         "이익": prev_box["이익"], "객단가": (prev_box["매출"] / _q_prev) if _q_prev else None,
+         "이익": prev_box["이익"], "객단가": prev_box.get("객단가"),
          "수익율": prev_box["수익율"], "달성율": prev_box["달성율"]},
         {"월": cur_label, "목표": cur_box["목표"], "매출": cur_box["매출"],
-         "이익": cur_box["이익"], "객단가": (cur_box["매출"] / _q_cur) if _q_cur else None,
+         "이익": cur_box["이익"], "객단가": cur_box.get("객단가"),
          "수익율": cur_box["수익율"], "달성율": cur_box["달성율"]},
     ])
     st.dataframe(
@@ -456,11 +464,12 @@ with c_left:
     st.markdown("##### 🔀 병행 / 공식 (당월)")
     if _dt_on:
         _g2 = raw_d.groupby("분류")[["매출", "이익", "수량"]].sum()
+        _g2q = raw_d[raw_d["매출"] != 0].groupby("분류")["수량"].sum()
         _rows2 = []
         for _cls in ["병행", "공식"]:
             _s2 = float(_g2.loc[_cls, "매출"]) if _cls in _g2.index else 0.0
             _p2 = float(_g2.loc[_cls, "이익"]) if _cls in _g2.index else 0.0
-            _q2 = float(_g2.loc[_cls, "수량"]) if _cls in _g2.index else 0.0
+            _q2 = float(_g2q.get(_cls, 0))
             _rows2.append({"구분": _cls, "매출": _s2, "이익": _p2,
                            "객단가": (_s2 / _q2) if _q2 else None,
                            "수익율": _p2 / _s2 if _s2 else 0.0})
@@ -490,6 +499,8 @@ with c_right:
                .agg(매출=("매출", "sum"), 이익=("이익", "sum"), 수량=("수량", "sum"))
                .sort_values("매출", ascending=False).reset_index()
                .rename(columns={"카테고리": "구분"}))
+        _cqp = raw_d[raw_d["매출"] != 0].groupby("카테고리")["수량"].sum()
+        _cs["수량"] = _cs["구분"].map(_cqp).fillna(0)
         _cs["객단가"] = (_cs["매출"] / _cs["수량"].replace(0, pd.NA)).astype(float)
         _cs["수익율"] = (_cs["이익"] / _cs["매출"].replace(0, pd.NA)).fillna(0)
         _tq = float(_cs["수량"].sum())
@@ -504,16 +515,8 @@ with c_right:
             hide_index=True, use_container_width=True, height=350,
         )
     else:
-        _cq = raw.groupby("카테고리")["수량"].sum()
-        _cs0 = cat_sales.copy()
-        _q0 = _cs0["구분"].map(_cq)
-        _cs0.insert(list(_cs0.columns).index("수익율"), "객단가",
-                    (_cs0["매출"] / _q0).where(_q0 > 0))
-        _cs0.loc[_cs0["구분"] == "총합", "객단가"] = (
-            (_cs0.loc[_cs0["구분"] == "총합", "매출"] / float(_cq.sum()))
-            if float(_cq.sum()) else None)
         st.dataframe(
-            _cs0.style.format({
+            cat_sales.style.format({
                 "매출": "{:,.0f}", "이익": "{:,.0f}", "객단가": "{:,.0f}",
                 "수익율": "{:.1%}", "재고원가": "{:,.0f}",
             }, na_rep="-"),
@@ -548,7 +551,7 @@ if _dt_on:
            .agg(수량=("수량", "sum"), 매출=("매출", "sum"), 이익=("이익", "sum"))
            .sort_values("매출", ascending=False).reset_index())
     if hide_zero:
-        _mv = _mv[_mv["매출"] != 0]
+        _mv = _mv[_mv["매출"] > 0]
     _mv["수익율"] = (_mv["이익"] / _mv["매출"].replace(0, pd.NA)).fillna(0)
     _mtot = pd.DataFrame([{"쇼핑몰": "합계", "수량": _mv["수량"].sum(), "매출": _mv["매출"].sum(),
                            "이익": _mv["이익"].sum(),
@@ -846,10 +849,11 @@ if _q.strip():
                 _stock_models.add(_m3)
         _stock = sum(stock_map.get(_m3, 0) for _m3 in _stock_models)
         _tot_q = float(_hit["수량"].sum())
+        _tot_qp = float(_hit.loc[_hit["매출"] != 0, "수량"].sum())   # 객단가용
         _sc1, _sc2, _sc3, _sc4, _sc5, _sc6 = st.columns(6)
         _sc1.metric("매출", f"{_tot_s:,.0f}")
         _sc2.metric("수익", f"{_tot_p:,.0f}")
-        _sc3.metric("객단가", f"{(_tot_s/_tot_q if _tot_q else 0):,.0f}")
+        _sc3.metric("객단가", f"{(_tot_s/_tot_qp if _tot_qp else 0):,.0f}")
         _sc4.metric("수익율", f"{(_tot_p/_tot_s if _tot_s else 0):.1%}")
         _sc5.metric("수량", f"{_tot_q:,.0f}개")
         _sc6.metric("남은 재고", f"{_stock:,.0f}개")
