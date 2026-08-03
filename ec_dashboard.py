@@ -857,6 +857,45 @@ if _q.strip():
         _sc4.metric("수익율", f"{(_tot_p/_tot_s if _tot_s else 0):.1%}")
         _sc5.metric("수량", f"{_tot_q:,.0f}개")
         _sc6.metric("남은 재고", f"{_stock:,.0f}개")
+        # 라인별 이미지 카드 (매출 순)
+        _lt = (_hit.groupby("라인명")
+               .agg(매출=("매출", "sum"), 이익=("이익", "sum"), 수량=("수량", "sum"),
+                    브랜드=("브랜드", "first"), 카테고리=("카테고리", "first"))
+               .sort_values("매출", ascending=False).head(12))
+        if len(_lt):
+            _lms = _hit.groupby(["라인명", "상품"])["매출"].sum().reset_index()
+            _lrep = _lms.loc[_lms.groupby("라인명")["매출"].idxmax()].set_index("라인명")["상품"]
+            _lcards = ""
+            for _ln4, _r4 in _lt.iterrows():
+                _u4 = (img_map.get(str(_ln4).strip(), "")
+                       or img_map.get(str(_lrep.get(_ln4, "")).strip(), ""))
+                if _u4:
+                    _im4 = (f'<img src="{_u4}" style="width:56px;height:56px;object-fit:cover;'
+                            'border-radius:8px;border:1px solid #eef2f7;background:#f1f5f9;flex:0 0 auto;">')
+                else:
+                    _im4 = ('<div style="width:56px;height:56px;background:#f1f5f9;border:1px solid #eef2f7;'
+                            'border-radius:8px;display:flex;align-items:center;justify-content:center;'
+                            'color:#cbd5e1;font-size:20px;flex:0 0 auto;">📦</div>')
+                _rt4 = (_r4["이익"] / _r4["매출"]) if _r4["매출"] else 0
+                _lcards += (
+                    '<div style="display:flex;gap:9px;align-items:center;padding:9px;'
+                    'border:1px solid #eef2f7;border-radius:10px;background:#fff;">'
+                    + _im4 +
+                    '<div style="min-width:0;flex:1;">'
+                    f'<div style="font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;'
+                    f'text-overflow:ellipsis;">{_r4["브랜드"]} · {_r4["카테고리"]}</div>'
+                    f'<div style="font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;'
+                    f'overflow:hidden;text-overflow:ellipsis;">{_ln4}</div>'
+                    f'<div style="font-size:11px;color:#0f172a;">{_r4["매출"]:,.0f}'
+                    f'<span style="color:#64748b;"> · {_rt4:.1%} · {_r4["수량"]:,.0f}개</span></div>'
+                    '</div></div>'
+                )
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:6px 0 14px;">'
+                + _lcards + '</div>', unsafe_allow_html=True,
+            )
+            if len(_lt) == 12:
+                st.caption("매출 상위 12개 라인만 표시")
         # 몰별 집계 (어느 몰에서 얼마나 팔렸는지)
         st.markdown("**몰별 집계**")
         _mt = (_hit.groupby("쇼핑몰")
